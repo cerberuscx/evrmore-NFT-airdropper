@@ -140,13 +140,36 @@ call :log "Listing my assets with filter: %ASSET_FILTER%"
 call :send_rpc_command "listmyassets" "%ASSET_FILTER%" %VERBOSE% %COUNT% %START% %CONFS%
 call :check_error "Error occurred while listing my assets."
 
-echo My assets list saved to asset_list.txt
-type asset_list.txt
-call :log "Asset list result:"
-type asset_list.txt >> %LOG_FILE%
-
+call :parse_list_assets_output
 pause
 goto menu
+
+:parse_list_assets_output
+set "ASSET_LIST="
+for /f "tokens=*" %%a in ('type rpc_output.txt ^| findstr /i /c:"\"result\""') do (
+    set "line=%%a"
+    REM Clean up the line to remove unwanted characters
+    set "line=!line:{=!"
+    set "line=!line:}=!"
+    set "line=!line:["=!"
+    set "line=!line:]"=!"
+    set "line=!line:"=!"
+    REM Append the cleaned line to the asset list
+    set "ASSET_LIST=!ASSET_LIST!!line!"
+)
+
+REM If assets were found, display them
+if not defined ASSET_LIST (
+    echo No assets found or unable to retrieve assets.
+) else (
+    echo Assets found:
+    echo !ASSET_LIST!
+)
+
+REM Log the output for later review
+echo !ASSET_LIST! > asset_list.txt
+goto :eof
+
 
 :mint_unique_asset
 echo.
@@ -156,6 +179,16 @@ set /p UNIQUE_TAG="Enter the unique tag (e.g., 001): "
 set /p IPFS_HASH="Enter the IPFS hash (optional): "
 set /p TO_ADDRESS="Enter the recipient address: "
 set /p CHANGE_ADDRESS="Enter the change address (optional): "
+
+REM Confirm before proceeding
+echo.
+echo You are about to mint a unique asset:
+echo Root Asset Name: %ROOT_ASSET_NAME%
+echo Unique Tag: %UNIQUE_TAG%
+echo Recipient Address: %TO_ADDRESS%
+set /p CONFIRM="Are you sure you want to proceed? (y/n): "
+if /i "%CONFIRM%" neq "y" goto menu
+
 call :log "Minting unique asset: %ROOT_ASSET_NAME%#%UNIQUE_TAG%"
 call :send_rpc_command "issueunique" "%ROOT_ASSET_NAME%" "[\""%UNIQUE_TAG%"\"]" "[\""%IPFS_HASH%"\"]" "%TO_ADDRESS%" "%CHANGE_ADDRESS%"
 call :check_error "Error occurred while minting unique asset."
@@ -166,6 +199,7 @@ echo %RESULT%, %ROOT_ASSET_NAME%, %TO_ADDRESS%, %DATE% %TIME% >> transactions.tx
 pause
 goto menu
 
+
 :airdrop_single
 echo.
 echo === Airdrop to Single Address ===
@@ -173,11 +207,18 @@ set /p ASSET_NAME="Enter the asset name: "
 set /p AMOUNT="Enter the asset amount: "
 set /p TO_ADDRESS="Enter the recipient address: "
 set /p MESSAGE="Enter the message (optional): "
-set EXPIRE_TIME=0
-set /p CHANGE_ADDRESS="Enter the change address (optional): "
-set /p ASSET_CHANGE_ADDRESS="Enter the asset change address (optional): "
+
+REM Confirm before proceeding
+echo.
+echo You are about to airdrop:
+echo Asset: %ASSET_NAME%
+echo Amount: %AMOUNT%
+echo Recipient Address: %TO_ADDRESS%
+set /p CONFIRM="Are you sure you want to proceed? (y/n): "
+if /i "%CONFIRM%" neq "y" goto menu
+
 call :log "Sending %AMOUNT% %ASSET_NAME% to %TO_ADDRESS%"
-call :send_rpc_command "transfer" "%ASSET_NAME%" "%AMOUNT%" "%TO_ADDRESS%" "%MESSAGE%" "%EXPIRE_TIME%" "%CHANGE_ADDRESS%" "%ASSET_CHANGE_ADDRESS%"
+call :send_rpc_command "transfer" "%ASSET_NAME%" "%AMOUNT%" "%TO_ADDRESS%" "%MESSAGE%" "0"
 call :check_error "Error occurred while sending asset."
 
 call :parse_rpc_output
@@ -191,6 +232,7 @@ if not defined TXID (
 pause
 goto menu
 
+
 :airdrop_multiple
 echo.
 echo === Airdrop to Multiple Addresses ===
@@ -202,8 +244,15 @@ if not exist addresses.txt (
 
 set /p ASSET_NAME="Enter the asset name to airdrop: "
 set /p AMOUNT="Enter the amount to send to each address: "
-call :log "Starting airdrop to multiple addresses"
 
+REM Confirm before proceeding
+echo.
+echo You are about to airdrop %AMOUNT% of %ASSET_NAME% to multiple addresses.
+echo Addresses file: addresses.txt
+set /p CONFIRM="Are you sure you want to proceed? (y/n): "
+if /i "%CONFIRM%" neq "y" goto menu
+
+call :log "Starting airdrop to multiple addresses"
 for /f "tokens=*" %%a in (addresses.txt) do (
     set TO_ADDRESS=%%a
     call :log "Sending %AMOUNT% %ASSET_NAME% to !TO_ADDRESS!"
@@ -225,6 +274,7 @@ call :log "Finished airdrop to multiple addresses"
 echo Airdrop completed. Check transactions.txt for details.
 pause
 goto menu
+
 
 :send_rpc_command
 setlocal
@@ -301,15 +351,7 @@ if "!RESULT:~0,5!"=="error" (
 )
 
 :parse_rpc_output
-set "RESULT="
-for /f "tokens=2 delims=:" %%a in ('type rpc_output.txt ^| findstr /C:"\"result\""') do (
-    set "line=%%a"
-    REM Clean unnecessary characters
-    set "line=!line:{=!"
-    set "line=!line:}=!"
-    set "line=!line:]=""!"
-    set "RESULT=!line:~0,-1!"
-)
+for /f "tokens=2 delims=[]," %%a in ('findstr /i /c:"\"result\"" rpc_output.txt') do set TXID=%%~a
 goto :eof
 
 :check_error
@@ -320,7 +362,6 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 goto :eof
-
 
 :log
 echo [%date% %time%] %~1 >> %LOG_FILE%
